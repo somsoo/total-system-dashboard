@@ -60,7 +60,9 @@ categories = {
     "other": []
 }
 
-for r in repos:
+sites_data = []
+
+for idx, r in enumerate(repos):
     name = r["name"]
     branch = r.get("defaultBranchRef", {}).get("name", "main") if isinstance(r.get("defaultBranchRef"), dict) else r.get("default_branch", "main")
     desc = r.get("description") or ""
@@ -68,14 +70,23 @@ for r in repos:
     is_private = r.get("isPrivate", False)
 
     cname = get_raw_file(name, branch, "CNAME")
-    if not cname:
-        if not is_private and name not in ["total-system-dashboard", "pages"]:
-            cname = f"{name}.enjoy-onepage.com"
+    if not cname and not is_private and name not in ["total-system-dashboard", "pages"]:
+        cname = f"{name}.enjoy-onepage.com"
             
     live_url = f"https://{cname}" if cname else None
     extra_info = ""
     
+    cat = "other"
+    cat_label = "기타 자산"
+    badge_color = "gray"
+    sched = ""
+    
     if name.startswith("cpa-"):
+        cat = "cpa"
+        cat_label = "📈 CPA 제휴 블로그"
+        badge_color = "blue"
+        m = (idx * 3) % 60
+        sched = f"07:{m:02d} / 13:{m:02d} / 20:{m:02d} (3-Pass)"
         camp_json = get_raw_file(name, branch, "campaigns.json")
         if camp_json:
             try:
@@ -91,24 +102,40 @@ for r in repos:
         })
 
     elif "coupang" in name.lower():
+        cat = "coupang"
+        cat_label = "🛒 쿠팡 파트너스"
+        badge_color = "emerald"
+        sched = "FIFO 롱테일 자동 순환"
         categories["coupang"].append({
             "name": name, "desc": desc or "쿠팡 파트너스 고수익 가전/리빙 니치 블로그", "domain": cname, "url": live_url,
             "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
         })
 
     elif name.startswith("blog-") or name in ["economy-blog", "newspic-blog"]:
+        cat = "expert"
+        cat_label = "📰 전문 시사/뉴스"
+        badge_color = "purple"
+        sched = "07:xx / 13:xx / 20:xx (실시간 속보)"
         categories["expert"].append({
             "name": name, "desc": desc or "실시간 시사/뉴스 팩트 기반 전문 분석 블로그", "domain": cname, "url": live_url,
             "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
         })
 
     elif "threads" in name.lower():
+        cat = "threads"
+        cat_label = "🧵 Threads 봇"
+        badge_color = "rose"
+        sched = "Meta Graph API 연동"
         categories["threads"].append({
             "name": name, "desc": desc or "멀티 계정 Threads 공식 API 자동 포스팅 시스템", "domain": cname, "url": live_url,
             "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
         })
 
     elif "naver" in name.lower():
+        cat = "naver"
+        cat_label = "🟢 네이버 블로그"
+        badge_color = "green"
+        sched = "6-Pass 이미지 세탁"
         categories["naver"].append({
             "name": name, "desc": desc or "네이버 블로그 6-Pass 이미지 세탁 자동 포스팅 봇", "domain": cname, "url": live_url,
             "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
@@ -121,6 +148,10 @@ for r in repos:
         "stock-average-down-calc", "housing-score-calc", "calc-half-leave",
         "freelance-rate-calc", "insta-margin-calc"
     ]:
+        cat = "util_finance"
+        cat_label = "⚖️ 법정·금융 계산기"
+        badge_color = "amber"
+        sched = "구글 애드센스 탑재"
         categories["utility_legal_finance"].append({
             "name": name, "desc": desc, "domain": cname, "url": live_url,
             "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
@@ -133,12 +164,19 @@ for r in repos:
         "ott-party-calc", "color-coordinate-converter", "mbti-job-test",
         "mbti-for-senior", "stop-watch-game", "sudoku", "myip", "csv-to-single-column"
     ]:
+        cat = "util_life"
+        cat_label = "🍼 라이프·소셜 도구"
+        badge_color = "teal"
+        sched = "구글 애드센스 탑재"
         categories["utility_life_social"].append({
             "name": name, "desc": desc, "domain": cname, "url": live_url,
             "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
         })
 
     elif name in ["news-hub", "adpick-portal", "pages"]:
+        cat = "portal"
+        cat_label = "🌐 미디어 포털"
+        badge_color = "indigo"
         categories["portal"].append({
             "name": name, "desc": desc or "통합 미디어 및 포털 서비스", "domain": cname, "url": live_url,
             "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
@@ -148,6 +186,20 @@ for r in repos:
             "name": name, "desc": desc, "domain": cname, "url": live_url,
             "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
         })
+
+    sites_data.append({
+        "name": name,
+        "desc": extra_info or desc,
+        "cat": cat,
+        "cat_label": cat_label,
+        "badge_color": badge_color,
+        "domain": cname,
+        "url": live_url,
+        "gh_url": f"https://github.com/{GITHUB_USER}/{name}",
+        "pushed": pushed_at,
+        "priv": is_private,
+        "sched": sched
+    })
 
 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -160,10 +212,13 @@ naver_cnt = len(categories["naver"])
 util_cnt = len(categories["utility_legal_finance"]) + len(categories["utility_life_social"])
 portal_cnt = len(categories["portal"])
 
+# 1. Generate README.md
 md = f"""# 🏢 Total System Master Control Dashboard
 
 > **전사 디지털 자산 통합 관제 대시보드 (Total System Empire)**  
 > **마지막 갱신 일시**: `{now_str} (KST)` | **총 관리 저장소**: **`{total_sites}개`**
+>
+> 🌐 **웹 대시보드 바로가기**: [https://somsoo.github.io/total-system-dashboard/](https://somsoo.github.io/total-system-dashboard/)
 
 ---
 
@@ -181,8 +236,6 @@ md = f"""# 🏢 Total System Master Control Dashboard
 ---
 
 ## 🛒 1. 쿠팡 파트너스 수익형 니치 블로그 ({coupang_cnt} Sites)
-> **아키텍처**: 카테고리별 니치 가전/리빙 버티컬 분리 + 고밀도 스펙 비교 + 롱테일 키워드 FIFO 자연 순환
-
 | 저장소 (Repository) | 타겟 니치 & 주요 다룸 제품 | 라이브 도메인 (Live Domain) | 최근 업데이트 | 상태 |
 | :--- | :--- | :--- | :---: | :---: |
 """
@@ -195,8 +248,6 @@ md += f"""
 ---
 
 ## 📈 2. CPA 제휴 마케팅 블로그 ({cpa_cnt} Sites)
-> **아키텍처**: 3-Pass 혹평-재작성 엔진 + 일상 포스팅 직링크 0개(허브 앤 스포크 `/guide/`) + 네이버 API 키워드 FIFO 순환
-
 | 저장소 (Repository) | 전담 캠페인명 | 라이브 도메인 (Live Domain) | 발행 스케줄 (KST) | 최근 업데이트 |
 | :--- | :--- | :--- | :---: | :---: |
 """
@@ -211,8 +262,6 @@ md += f"""
 ---
 
 ## 📰 3. 전문 시사/뉴스 블로그 ({expert_cnt} Sites)
-> **아키텍처**: 네이버/구글 실시간 속보 헤드라인 스크래핑 + 최근 30개 중복 배제 슬라이딩 윈도우 + 팩트 그라운딩
-
 | 저장소 (Repository) | 전문 취재 분야 및 소스 | 라이브 도메인 (Live Domain) | 발행 스케줄 (KST) | 최근 업데이트 |
 | :--- | :--- | :--- | :---: | :---: |
 """
@@ -227,7 +276,6 @@ md += f"""
 ---
 
 ## 🧮 4. 애드센스 고단가 원페이지 유틸리티 웹앱 & 계산기 ({util_cnt} Sites)
-> **아키텍처**: 100% 클라이언트 Vanilla JS + Tailwind CSS + 구글 애드센스 최적화 + GitHub Pages 배포
 
 ### ⚖️ 법정·노무·세무 & 부동산·금융 계산기 ({len(categories['utility_legal_finance'])} Sites)
 | 서비스명 (Repository) | 계산기 핵심 기능 및 용도 | 라이브 도메인 (Live Domain) | 상태 |
@@ -252,8 +300,6 @@ md += f"""
 ---
 
 ## 🧵 5. SNS & 플랫폼 바이럴 자동화 시스템
-> **아키텍처**: 계정별 페르소나 주입 + Gemini AI 글 생성 + 공식 API 연동
-
 | 시스템명 | 저장소 | 형태 | 주요 기능 및 연동 상태 |
 | :--- | :--- | :---: | :--- |
 | **Threads 멀티 계정 봇** | [`threads-auto`](https://github.com/{GITHUB_USER}/threads-auto) | Private | Meta 공식 Graph API 연동, 멀티 페르소나 자동 포스팅 & 웹 관제 UI |
@@ -270,20 +316,26 @@ for s in categories["portal"]:
     dom_link = f"[{s['domain']}]({s['url']})" if s['url'] else "`N/A`"
     md += f"| **{s['name']}** | [{s['name']}]({s['gh_url']}) | {dom_link} | {s['desc']} |\n"
 
-md += f"""
----
-
-## 🛠️ 중앙 관제 자동화 규칙 (Automated Master Rules)
-1. **무인 스케줄 분산 (Collision-Free Staggering)**:
-   - 15개 CPA 블로그(00분~42분)와 7개 전문 블로그(45분~57분)가 충돌 없이 매일 07시, 13시, 20시에 2~3분 간격으로 순차 발행.
-2. **영구 불사 키워드 FIFO 큐 (`used_keywords.txt`)**:
-   - 신규 롱테일 키워드 소진 시 가장 오래된 주제부터 순환 재작성하여 무한 자율 운영.
-3. **직링크 0개 허브 앤 스포크 (Hub & Spoke)**:
-   - 모든 일상 글은 순수 정보글로 발행하며 제휴 직링크는 단 1개의 공식 종합 가이드(`/guide/`)에만 격리.
-"""
-
-output_path = os.path.join(os.path.dirname(__file__), "README.md")
-with open(output_path, "w", encoding="utf-8") as f:
+readme_path = os.path.join(os.path.dirname(__file__), "README.md")
+with open(readme_path, "w", encoding="utf-8") as f:
     f.write(md)
 
-print("generate_dashboard.py updated README.md successfully.")
+# 2. Render index.html
+html_path = os.path.join(os.path.dirname(__file__), "index.html")
+
+# Read current index.html template and update SITES data
+with open(html_path, "r", encoding="utf-8") as f:
+    orig_html = f.read()
+
+import re
+new_html = re.sub(
+    r'const SITES = \[[\s\S]*?\];',
+    f'const SITES = {json.dumps(sites_data, ensure_ascii=False)};',
+    orig_html
+)
+new_html = re.sub(r'갱신: [^<]+', f'갱신: {now_str}', new_html)
+
+with open(html_path, "w", encoding="utf-8") as f:
+    f.write(new_html)
+
+print("generate_dashboard.py: Updated README.md and index.html successfully.")
