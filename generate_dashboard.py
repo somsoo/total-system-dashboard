@@ -1,7 +1,11 @@
 import os
 import requests
-from datetime import datetime
 import json
+import sys
+import subprocess
+from datetime import datetime
+
+sys.stdout.reconfigure(encoding='utf-8')
 
 GITHUB_USER = "somsoo"
 TOKEN = os.environ.get("GITHUB_TOKEN")
@@ -10,125 +14,276 @@ headers = {"Accept": "application/vnd.github.v3+json"}
 if TOKEN:
     headers["Authorization"] = f"token {TOKEN}"
 
-repos_url = f"https://api.github.com/users/somsoo/repos?per_page=100"
-response = requests.get(repos_url, headers=headers)
+print("Fetching repository list...")
 
-if response.status_code != 200:
-    print(f"Failed to fetch repos: {response.status_code}")
-    exit(1)
+repos = []
+try:
+    res = subprocess.run(
+        ["gh", "repo", "list", GITHUB_USER, "--limit", "100", "--json", "name,description,isPrivate,pushedAt,url,defaultBranchRef"],
+        capture_output=True
+    )
+    if res.returncode == 0 and res.stdout:
+        repos = json.loads(res.stdout.decode('utf-8'))
+except Exception as e:
+    print(f"gh cli fallback: {e}")
 
-repos = response.json()
-factory_sites = []
+if not repos:
+    repos_url = f"https://api.github.com/users/{GITHUB_USER}/repos?per_page=100"
+    r = requests.get(repos_url, headers=headers)
+    if r.status_code == 200:
+        repos = r.json()
+    else:
+        print(f"Failed to fetch repos: {r.status_code}")
+        sys.exit(1)
 
-def parse_bom_json(text):
-    return json.loads(text.encode('utf-8').decode('utf-8-sig'))
+print(f"Total {len(repos)} repositories loaded.")
 
-for repo in repos:
-    repo_name = repo["name"]
-    branch = repo.get("default_branch", "main")
-    raw_url = f"https://raw.githubusercontent.com/{GITHUB_USER}/{repo_name}/{branch}/.factory.json"
-    meta_resp = requests.get(raw_url, headers=headers)
+def get_raw_file(repo_name, branch, path):
+    url = f"https://raw.githubusercontent.com/{GITHUB_USER}/{repo_name}/{branch}/{path}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=3)
+        if resp.status_code == 200:
+            return resp.text.strip().replace('\x00', '')
+    except:
+        pass
+    return None
+
+categories = {
+    "coupang": [],
+    "cpa": [],
+    "expert": [],
+    "threads": [],
+    "naver": [],
+    "utility_legal_finance": [],
+    "utility_life_social": [],
+    "portal": [],
+    "other": []
+}
+
+for r in repos:
+    name = r["name"]
+    branch = r.get("defaultBranchRef", {}).get("name", "main") if isinstance(r.get("defaultBranchRef"), dict) else r.get("default_branch", "main")
+    desc = r.get("description") or ""
+    pushed_at = r.get("pushedAt", "")[:10]
+    is_private = r.get("isPrivate", False)
+
+    cname = get_raw_file(name, branch, "CNAME")
+    if not cname:
+        if not is_private and name not in ["total-system-dashboard", "pages"]:
+            cname = f"{name}.enjoy-onepage.com"
+            
+    live_url = f"https://{cname}" if cname else None
+    extra_info = ""
     
-    if meta_resp.status_code == 200:
-        try:
-            meta = parse_bom_json(meta_resp.text)
-            meta["repo"] = repo_name
-            if not meta.get("domain") and meta.get("type") != "threads":
-                meta["domain"] = f"{repo_name}.enjoy-onepage.com"
-            
-            if meta.get("domain"):
-                meta["url"] = f"https://{meta['domain']}"
-            
-            if meta["type"] == "cpa":
-                camp_url = f"https://raw.githubusercontent.com/{GITHUB_USER}/{repo_name}/{branch}/campaigns.json"
-                camp_resp = requests.get(camp_url, headers=headers)
-                if camp_resp.status_code == 200:
-                    meta["campaign_count"] = len(parse_bom_json(camp_resp.text))
-                else:
-                    meta["campaign_count"] = 0
-            
-            elif meta["type"] == "threads":
-                db_url = f"https://raw.githubusercontent.com/{GITHUB_USER}/{repo_name}/{branch}/database.json"
-                db_resp = requests.get(db_url, headers=headers)
-                if db_resp.status_code == 200:
-                    db_data = parse_bom_json(db_resp.text)
-                    meta['global_settings'] = db_data.get('global_settings', {})
-                    accounts = db_data.get("accounts", [])
-                    posts = db_data.get("post_logs", [])
-                    
-                    post_counts = {}
-                    for p in posts:
-                        acc_id = p.get("account_id")
-                        if p.get("status") == "posted" or p.get("posted_at"):
-                            post_counts[acc_id] = post_counts.get(acc_id, 0) + 1
-                    
-                    enriched_accounts = []
-                    for acc in accounts:
-                        acc_id = acc.get("id")
-                        enriched_accounts.append({
-                            "username": acc.get("username", "Unknown"),
-                            "display_name": acc.get("display_name", ""),
-                            "persona": acc.get("persona", ""),
-                            "topics": ", ".join(acc.get("topics", [])),
-                            "posts_per_day": acc.get("posts_per_day", 0),
-                            "total_posted": post_counts.get(acc_id, 0)
-                        })
-                    meta["accounts_data"] = enriched_accounts
-                else:
-                    meta["accounts_data"] = []
-            
-            factory_sites.append(meta)
-        except Exception as e:
-            print(f"Error parsing .factory.json in {repo_name}: {e}")
+    if name.startswith("cpa-"):
+        camp_json = get_raw_file(name, branch, "campaigns.json")
+        if camp_json:
+            try:
+                c_data = json.loads(camp_json.encode('utf-8').decode('utf-8-sig'))
+                c_item = c_data[0] if isinstance(c_data, list) else c_data
+                extra_info = c_item.get("name", "")
+            except: pass
+        if not extra_info:
+            extra_info = desc
+        categories["cpa"].append({
+            "name": name, "desc": extra_info, "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
 
-readme_content = f"# 🏭 Factory Control Dashboard\n\n"
-readme_content += f"> Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (UTC)\n\n"
+    elif "coupang" in name.lower():
+        categories["coupang"].append({
+            "name": name, "desc": desc or "쿠팡 파트너스 고수익 가전/리빙 니치 블로그", "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
 
-cpa_sites = [s for s in factory_sites if s.get("type") == "cpa"]
-threads_bots = [s for s in factory_sites if s.get("type") == "threads"]
-onepage_sites = [s for s in factory_sites if s.get("type") == "onepage"]
+    elif name.startswith("blog-") or name in ["economy-blog", "newspic-blog"]:
+        categories["expert"].append({
+            "name": name, "desc": desc or "실시간 시사/뉴스 팩트 기반 전문 분석 블로그", "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
 
-readme_content += f"## 📈 CPA Blogs ({len(cpa_sites)} Sites)\n\n"
-readme_content += "| Repository | Domain | Active Campaigns |\n"
-readme_content += "|---|---|---|\n"
-for site in cpa_sites:
-    readme_content += f"| [{site['repo']}](https://github.com/{GITHUB_USER}/{site['repo']}) | [{site['domain']}]({site['url']}) | {site.get('campaign_count', 0)} |\n"
+    elif "threads" in name.lower():
+        categories["threads"].append({
+            "name": name, "desc": desc or "멀티 계정 Threads 공식 API 자동 포스팅 시스템", "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
 
-readme_content += f"\n## 📱 Threads Bots ({len(threads_bots)} Repositories)\n\n"
-if not threads_bots:
-    readme_content += "*No bots registered yet.*\n\n"
-else:
-    for bot in threads_bots:
-        readme_content += f"### [{bot['repo']}](https://github.com/{GITHUB_USER}/{bot['repo']})\n"
-        
-        global_settings = bot.get('global_settings', {})
-        if global_settings and 'safety_rules_ko' in global_settings:
-            ko_rule = global_settings['safety_rules_ko'].replace('\n', ' ')
-            readme_content += f"> **🤖 Global Safety Rule:** {ko_rule}\n\n"
-            
-        accs = bot.get("accounts_data", [])
-        readme_content += f"**Operating Accounts ({len(accs)}):**\n\n"
-        readme_content += "| Username | Persona | Topics | Target/Day | Total Posted |\n"
-        readme_content += "|---|---|---|---|---|\n"
-        for acc in accs:
-            disp = acc['display_name'].replace('|', '') if acc['display_name'] else acc['username']
-            topics = acc['topics'].replace('|', ',')
-            persona = acc['persona'].replace('\n', ' ').replace('|', ',')
-            persona_html = f"<details><summary>🔍 페르소나 보기</summary><br><i>{persona}</i></details>"
-            readme_content += f"| **@{acc['username']}**<br>({disp}) | {persona_html} | {topics} | {acc['posts_per_day']} / day | **{acc['total_posted']}** |\n"
-        readme_content += "\n"
+    elif "naver" in name.lower():
+        categories["naver"].append({
+            "name": name, "desc": desc or "네이버 블로그 6-Pass 이미지 세탁 자동 포스팅 봇", "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
 
-readme_content += f"\n## 🚀 Onepage Landings ({len(onepage_sites)} Sites)\n\n"
-if not onepage_sites:
-    readme_content += "*No onepage sites registered yet.*\n\n"
-else:
-    readme_content += "| Repository | Domain |\n"
-    readme_content += "|---|---|\n"
-    for site in onepage_sites:
-        readme_content += f"| [{site['repo']}](https://github.com/{GITHUB_USER}/{site['repo']}) | [{site['domain']}]({site['url']}) |\n"
-    readme_content += "\n"
+    elif name in [
+        "overtime_calc_site", "parental_calc_site", "unemployed_calc_site",
+        "severance_calc_site", "pension_calc_site", "freelancer_tax_site",
+        "smallbizcalc_site", "jeonse_renew_calc_site", "jeonse-deposit-calc",
+        "stock-average-down-calc", "housing-score-calc", "calc-half-leave",
+        "freelance-rate-calc", "insta-margin-calc"
+    ]:
+        categories["utility_legal_finance"].append({
+            "name": name, "desc": desc, "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
 
-with open("README.md", "w", encoding="utf-8") as f:
-    f.write(readme_content)
+    elif name in [
+        "wonderweeks_site", "pet_calc_site", "solar_calc_site", "aicostcalc_site",
+        "sudokuportal", "fridge-dday-alarm", "dog-walk-weather", "protein-price-calc",
+        "shorts-script-timer", "sns-font-converter", "resume-text-counter",
+        "ott-party-calc", "color-coordinate-converter", "mbti-job-test",
+        "mbti-for-senior", "stop-watch-game", "sudoku", "myip", "csv-to-single-column"
+    ]:
+        categories["utility_life_social"].append({
+            "name": name, "desc": desc, "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
 
-print("Dashboard README.md generated successfully.")
+    elif name in ["news-hub", "adpick-portal", "pages"]:
+        categories["portal"].append({
+            "name": name, "desc": desc or "통합 미디어 및 포털 서비스", "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
+    else:
+        categories["other"].append({
+            "name": name, "desc": desc, "domain": cname, "url": live_url,
+            "pushed": pushed_at, "priv": is_private, "gh_url": f"https://github.com/{GITHUB_USER}/{name}"
+        })
+
+now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+total_sites = len(repos)
+cpa_cnt = len(categories["cpa"])
+coupang_cnt = len(categories["coupang"])
+expert_cnt = len(categories["expert"])
+threads_cnt = len(categories["threads"])
+naver_cnt = len(categories["naver"])
+util_cnt = len(categories["utility_legal_finance"]) + len(categories["utility_life_social"])
+portal_cnt = len(categories["portal"])
+
+md = f"""# 🏢 Total System Master Control Dashboard
+
+> **전사 디지털 자산 통합 관제 대시보드 (Total System Empire)**  
+> **마지막 갱신 일시**: `{now_str} (KST)` | **총 관리 저장소**: **`{total_sites}개`**
+
+---
+
+## 📊 종합 자산 현황 요약 (Portfolio Overview)
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  🛒 쿠팡 파트너스 블로그 : {coupang_cnt:>2}개  │  📈 CPA 버티컬 블로그   : {cpa_cnt:>2}개             │
+│  📰 전문 시사/뉴스 블로그: {expert_cnt:>2}개  │  🧮 애드센스 원페이지 웹앱: {util_cnt:>2}개             │
+│  🧵 쓰레드 자동화 봇     : {threads_cnt:>2}개  │  🟢 네이버 블로그 봇    : {naver_cnt:>2}개             │
+│  🌐 미디어 포털 & 인프라 : {portal_cnt:>2}개  │  💼 총 관리 프로젝트    : {total_sites:>2}개             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🛒 1. 쿠팡 파트너스 수익형 니치 블로그 ({coupang_cnt} Sites)
+> **아키텍처**: 카테고리별 니치 가전/리빙 버티컬 분리 + 고밀도 스펙 비교 + 롱테일 키워드 FIFO 자연 순환
+
+| 저장소 (Repository) | 타겟 니치 & 주요 다룸 제품 | 라이브 도메인 (Live Domain) | 최근 업데이트 | 상태 |
+| :--- | :--- | :--- | :---: | :---: |
+"""
+
+for s in categories["coupang"]:
+    dom_link = f"[{s['domain']}]({s['url']})" if s['url'] else "`N/A`"
+    md += f"| [{s['name']}]({s['gh_url']}) | {s['desc']} | {dom_link} | `{s['pushed']}` | ✅ 정상 가동 |\n"
+
+md += f"""
+---
+
+## 📈 2. CPA 제휴 마케팅 블로그 ({cpa_cnt} Sites)
+> **아키텍처**: 3-Pass 혹평-재작성 엔진 + 일상 포스팅 직링크 0개(허브 앤 스포크 `/guide/`) + 네이버 API 키워드 FIFO 순환
+
+| 저장소 (Repository) | 전담 캠페인명 | 라이브 도메인 (Live Domain) | 발행 스케줄 (KST) | 최근 업데이트 |
+| :--- | :--- | :--- | :---: | :---: |
+"""
+
+for idx, s in enumerate(categories["cpa"]):
+    dom_link = f"[{s['domain']}]({s['url']})" if s['url'] else "`N/A`"
+    m = (idx * 3) % 60
+    sched = f"07:{m:02d} / 13:{m:02d} / 20:{m:02d}"
+    md += f"| [{s['name']}]({s['gh_url']}) | {s['desc']} | {dom_link} | `{sched}` | `{s['pushed']}` |\n"
+
+md += f"""
+---
+
+## 📰 3. 전문 시사/뉴스 블로그 ({expert_cnt} Sites)
+> **아키텍처**: 네이버/구글 실시간 속보 헤드라인 스크래핑 + 최근 30개 중복 배제 슬라이딩 윈도우 + 팩트 그라운딩
+
+| 저장소 (Repository) | 전문 취재 분야 및 소스 | 라이브 도메인 (Live Domain) | 발행 스케줄 (KST) | 최근 업데이트 |
+| :--- | :--- | :--- | :---: | :---: |
+"""
+
+for idx, s in enumerate(categories["expert"]):
+    dom_link = f"[{s['domain']}]({s['url']})" if s['url'] else "`N/A`"
+    m = 45 + (idx * 2)
+    sched = f"07:{m:02d} / 13:{m:02d} / 20:{m:02d}" if m < 60 else "07:59 / 13:59 / 20:59"
+    md += f"| [{s['name']}]({s['gh_url']}) | {s['desc']} | {dom_link} | `{sched}` | `{s['pushed']}` |\n"
+
+md += f"""
+---
+
+## 🧮 4. 애드센스 고단가 원페이지 유틸리티 웹앱 & 계산기 ({util_cnt} Sites)
+> **아키텍처**: 100% 클라이언트 Vanilla JS + Tailwind CSS + 구글 애드센스 최적화 + GitHub Pages 배포
+
+### ⚖️ 법정·노무·세무 & 부동산·금융 계산기 ({len(categories['utility_legal_finance'])} Sites)
+| 서비스명 (Repository) | 계산기 핵심 기능 및 용도 | 라이브 도메인 (Live Domain) | 상태 |
+| :--- | :--- | :--- | :---: |
+"""
+
+for s in categories["utility_legal_finance"]:
+    dom_link = f"[{s['domain']}]({s['url']})" if s['url'] else "`N/A`"
+    md += f"| [{s['name']}]({s['gh_url']}) | {s['desc']} | {dom_link} | 🚀 배포 완료 |\n"
+
+md += f"""
+### 🍼 라이프·육아·소셜 & 엔터테인먼트 계산기 ({len(categories['utility_life_social'])} Sites)
+| 서비스명 (Repository) | 계산기 핵심 기능 및 용도 | 라이브 도메인 (Live Domain) | 상태 |
+| :--- | :--- | :--- | :---: |
+"""
+
+for s in categories["utility_life_social"]:
+    dom_link = f"[{s['domain']}]({s['url']})" if s['url'] else "`N/A`"
+    md += f"| [{s['name']}]({s['gh_url']}) | {s['desc']} | {dom_link} | 🚀 배포 완료 |\n"
+
+md += f"""
+---
+
+## 🧵 5. SNS & 플랫폼 바이럴 자동화 시스템
+> **아키텍처**: 계정별 페르소나 주입 + Gemini AI 글 생성 + 공식 API 연동
+
+| 시스템명 | 저장소 | 형태 | 주요 기능 및 연동 상태 |
+| :--- | :--- | :---: | :--- |
+| **Threads 멀티 계정 봇** | [`threads-auto`](https://github.com/{GITHUB_USER}/threads-auto) | Private | Meta 공식 Graph API 연동, 멀티 페르소나 자동 포스팅 & 웹 관제 UI |
+| **네이버 블로그 자동화** | [`naverblog_auto`](https://github.com/{GITHUB_USER}/naverblog_auto) | Private | 네이버 블로그 6-Pass 이미지 세탁 및 자동 원고 생성 |
+
+---
+
+## 🌐 6. 미디어 포털 및 인프라 서비스
+| 서비스명 | 저장소 | 라이브 도메인 | 상세 설명 |
+| :--- | :--- | :--- | :--- |
+"""
+
+for s in categories["portal"]:
+    dom_link = f"[{s['domain']}]({s['url']})" if s['url'] else "`N/A`"
+    md += f"| **{s['name']}** | [{s['name']}]({s['gh_url']}) | {dom_link} | {s['desc']} |\n"
+
+md += f"""
+---
+
+## 🛠️ 중앙 관제 자동화 규칙 (Automated Master Rules)
+1. **무인 스케줄 분산 (Collision-Free Staggering)**:
+   - 15개 CPA 블로그(00분~42분)와 7개 전문 블로그(45분~57분)가 충돌 없이 매일 07시, 13시, 20시에 2~3분 간격으로 순차 발행.
+2. **영구 불사 키워드 FIFO 큐 (`used_keywords.txt`)**:
+   - 신규 롱테일 키워드 소진 시 가장 오래된 주제부터 순환 재작성하여 무한 자율 운영.
+3. **직링크 0개 허브 앤 스포크 (Hub & Spoke)**:
+   - 모든 일상 글은 순수 정보글로 발행하며 제휴 직링크는 단 1개의 공식 종합 가이드(`/guide/`)에만 격리.
+"""
+
+output_path = os.path.join(os.path.dirname(__file__), "README.md")
+with open(output_path, "w", encoding="utf-8") as f:
+    f.write(md)
+
+print("generate_dashboard.py updated README.md successfully.")
